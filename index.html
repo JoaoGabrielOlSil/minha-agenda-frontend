@@ -8,58 +8,8 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        body {
-            background-color: #f8f9fa;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .sidebar {
-            min-height: 100vh;
-            background-color: #1a2537;
-            color: #fff;
-        }
-        .sidebar .nav-link {
-            color: #a0aec0;
-            padding: 12px 20px;
-            border-radius: 8px;
-            margin-bottom: 5px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        .sidebar .nav-link:hover, .sidebar .nav-link.active {
-            color: #fff;
-            background-color: #2d3748;
-        }
-        .main-content {
-            padding: 30px;
-        }
-        .card-stat {
-            border: none;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        }
-        .table-container {
-            background: #fff;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        }
-        .badge-status {
-            font-size: 0.85rem;
-            padding: 6px 12px;
-            border-radius: 20px;
-        }
-        .action-popup-btn {
-            border-radius: 8px;
-            font-weight: 500;
-        }
-        .tab-section {
-            display: none;
-        }
-        .tab-section.active {
-            display: block;
-        }
-    </style>
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container-fluid">
@@ -67,7 +17,7 @@
             <!-- Sidebar Navigation -->
             <div class="col-md-3 col-lg-2 sidebar p-3 d-flex flex-column justify-content-between">
                 <div>
-                    <h3 class="fw-bold mb-4 text-primary"><i class="fas fa-calendar-check me-2"></i>Minha<span class="text-info">Agenda</span></h3>
+                    <h3 class="fw-bold mb-4 text-primary text-center"><i class="fas fa-calendar-check me-2"></i>Minha<span class="text-info">Agenda</span></h3>
                     <ul class="nav nav-pills flex-column mb-auto">
                         <li class="nav-item">
                             <a id="nav-agendamentos" class="nav-link active" onclick="mostrarAba('agendamentos')">
@@ -183,6 +133,7 @@
                                         <th>CPF</th>
                                         <th>TELEFONE</th>
                                         <th>E-MAIL</th>
+                                        <th>NASCIMENTO</th>
                                         <th>HISTÓRICO</th>
                                         <th>AÇÕES</th>
                                     </tr>
@@ -238,22 +189,18 @@
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title fw-bold"><i class="fas fa-lock me-2"></i>Autenticar na API FastAPI</h5>
+                    <h5 class="modal-title fw-bold"><i class="fas fa-lock me-2"></i>Autenticação de Usuários</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
                     <form id="form-auth" onsubmit="autenticarAPI(event)">
                         <div class="mb-3">
-                            <label class="form-label">URL da API (Backend)</label>
-                            <input type="url" id="auth-url" class="form-control" value="https://minha-agenda-flax-tau.vercel.app" required>
-                        </div>
-                        <div class="mb-3">
                             <label class="form-label">E-mail de Cadastro</label>
-                            <input type="email" id="auth-email" class="form-control" value="admin@gmail.com" required>
+                            <input type="email" id="auth-email" class="form-control" placeholder="seu@email.com" autocomplete="username" required>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Senha</label>
-                            <input type="password" id="auth-senha" class="form-control" value="1234" required>
+                            <input type="password" id="auth-senha" class="form-control" autocomplete="current-password" required>
                         </div>
                         <div class="d-flex justify-content-end gap-2">
                             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
@@ -299,12 +246,53 @@
                             <label class="form-label">Status Inicial</label>
                             <select id="novo-agendamento-status" class="form-select">
                                 <option value="pendente" selected>Pendente</option>
-                                <option value="agendada">Confirmado / Agendado</option>
+                                <option value="confirmado">Confirmado / Agendado</option>
                             </select>
                         </div>
                         <div class="d-flex justify-content-end gap-2">
                             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
                             <button type="submit" class="btn btn-primary">Cadastrar Agendamento</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 2.1: Editar Agendamento -->
+    <div class="modal fade" id="modalEditarAgendamento" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold"><i class="fas fa-calendar-check me-2 text-primary"></i>Editar Agendamento <span id="edit-agendamento-titulo-id"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="form-editar-agendamento" onsubmit="salvarEdicaoAgendamento(event)">
+                        <input type="hidden" id="edit-agendamento-id">
+                        <div class="mb-3">
+                            <label class="form-label">Paciente</label>
+                            <select id="edit-agendamento-paciente" class="form-select" onchange="atualizarCpfEditarAgendamento()" required>
+                                <option value="">-- Escolha um paciente --</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">CPF do Paciente</label>
+                            <input type="text" id="edit-agendamento-cpf" class="form-control" readonly>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Médico / Profissional</label>
+                            <select id="edit-agendamento-medico" class="form-select" required>
+                                <option value="">-- Escolha um médico --</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Data e Hora da Consulta</label>
+                            <input type="datetime-local" id="edit-agendamento-datahora" class="form-control" required>
+                        </div>
+                        <div class="d-flex justify-content-end gap-2">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                            <button type="submit" class="btn btn-primary">Atualizar Agendamento</button>
                         </div>
                     </form>
                 </div>
@@ -337,6 +325,10 @@
                         <div class="mb-3">
                             <label class="form-label">E-mail</label>
                             <input type="email" id="novo-paciente-email" class="form-control" placeholder="exemplo@email.com" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Data de Nascimento</label>
+                            <input type="date" id="novo-paciente-dtnasc" class="form-control" required>
                         </div>
                         <div class="d-flex justify-content-end gap-2">
                             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
@@ -375,6 +367,10 @@
                             <label class="form-label">E-mail</label>
                             <input type="email" id="edit-paciente-email" class="form-control" required>
                         </div>
+                        <div class="mb-3">
+                            <label class="form-label">Data de Nascimento</label>
+                            <input type="date" id="edit-paciente-dtnasc" class="form-control" required>
+                        </div>
                         <div class="d-flex justify-content-end gap-2">
                             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
                             <button type="submit" class="btn btn-primary">Atualizar Paciente</button>
@@ -400,8 +396,16 @@
                             <input type="text" id="novo-medico-nome" class="form-control" placeholder="Ex: Dr. Fernando Costa" required>
                         </div>
                         <div class="mb-3">
+                            <label class="form-label">CPF</label>
+                            <input type="text" id="novo-medico-cpf" class="form-control" placeholder="000.000.000-00" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">E-mail</label>
+                            <input type="email" id="novo-medico-email" class="form-control" placeholder="medico@clinica.com" required>
+                        </div>
+                        <div class="mb-3">
                             <label class="form-label">Registro (CRM / CRO)</label>
-                            <input type="text" id="novo-medico-crm" class="form-control" placeholder="CRM/SP 123456" required>
+                            <input type="text" id="novo-medico-crm" class="form-control" placeholder="CRM/SP 123456">
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Especialidade</label>
@@ -414,9 +418,9 @@
                         <div class="mb-3">
                             <label class="form-label">Status</label>
                             <select id="novo-medico-status" class="form-select">
-                                <option value="Ativo" selected>Ativo</option>
-                                <option value="Em Férias">Em Férias</option>
-                                <option value="Inativo">Inativo</option>
+                                <option value="ativo" selected>Ativo</option>
+                                <option value="ferias">Em Férias</option>
+                                <option value="inativo">Inativo</option>
                             </select>
                         </div>
                         <div class="d-flex justify-content-end gap-2">
@@ -445,8 +449,12 @@
                             <input type="text" id="edit-medico-nome" class="form-control" required>
                         </div>
                         <div class="mb-3">
+                            <label class="form-label">E-mail</label>
+                            <input type="email" id="edit-medico-email" class="form-control" required>
+                        </div>
+                        <div class="mb-3">
                             <label class="form-label">Registro (CRM / CRO)</label>
-                            <input type="text" id="edit-medico-crm" class="form-control" required>
+                            <input type="text" id="edit-medico-crm" class="form-control">
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Especialidade</label>
@@ -459,9 +467,9 @@
                         <div class="mb-3">
                             <label class="form-label">Status</label>
                             <select id="edit-medico-status" class="form-select">
-                                <option value="Ativo">Ativo</option>
-                                <option value="Em Férias">Em Férias</option>
-                                <option value="Inativo">Inativo</option>
+                                <option value="ativo">Ativo</option>
+                                <option value="ferias">Em Férias</option>
+                                <option value="inativo">Inativo</option>
                             </select>
                         </div>
                         <div class="d-flex justify-content-end gap-2">
@@ -491,25 +499,25 @@
 
                     <div class="d-grid gap-2">
                         <!-- Confirmar -->
-                        <button class="btn btn-outline-success action-popup-btn text-start p-3" onclick="executarAcaoPopUp('agendada')">
+                        <button class="btn btn-outline-success action-popup-btn text-start p-3" onclick="executarAcaoPopUp('confirmado')">
                             <i class="fas fa-check-circle fa-lg me-2"></i><strong>Confirmar / Agendar</strong>
                             <div class="small text-muted ms-4">Marca a consulta como confirmada</div>
                         </button>
 
                         <!-- Concluir -->
-                        <button class="btn btn-outline-info action-popup-btn text-start p-3" onclick="executarAcaoPopUp('concluida')">
+                        <button class="btn btn-outline-info action-popup-btn text-start p-3" onclick="executarAcaoPopUp('concluido')">
                             <i class="fas fa-user-check fa-lg me-2"></i><strong>Concluir Consulta</strong>
                             <div class="small text-muted ms-4">Finaliza a consulta realizada</div>
                         </button>
 
                         <!-- Paciente Ausente -->
-                        <button class="btn btn-outline-warning action-popup-btn text-start p-3" onclick="mostrarFormMotivo('paciente ausente')">
+                        <button class="btn btn-outline-warning action-popup-btn text-start p-3" onclick="mostrarFormMotivo('ausente')">
                             <i class="fas fa-user-slash fa-lg me-2"></i><strong>Paciente Ausente</strong>
                             <div class="small text-muted ms-4">Registra o não comparecimento do paciente</div>
                         </button>
 
                         <!-- Cancelar -->
-                        <button class="btn btn-outline-danger action-popup-btn text-start p-3" onclick="mostrarFormMotivo('cancelada')">
+                        <button class="btn btn-outline-danger action-popup-btn text-start p-3" onclick="mostrarFormMotivo('cancelado')">
                             <i class="fas fa-times-circle fa-lg me-2"></i><strong>Cancelar Consulta</strong>
                             <div class="small text-muted ms-4">Cancela o agendamento</div>
                         </button>
@@ -532,6 +540,7 @@
     <!-- Bootstrap 5 JS Bundle -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <!-- Custom JS -->
+    <script src="config.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

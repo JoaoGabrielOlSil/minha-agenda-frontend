@@ -1,43 +1,102 @@
-// Configuração da URL Base da API (padrão Vercel)
-let API_BASE_URL = localStorage.getItem("api_url") || "https://minha-agenda-flax-tau.vercel.app";
+// A URL da API (API_BASE_URL) fica em config.js, carregado antes deste arquivo.
 
 let statusSelecionadoTemp = "";
 
-// LISTAS EM MEMÓRIA PARA DEMONSTRAÇÃO E GERENCIAMENTO COMPLETO
-let listaPacientes = [
-    { id: 1, nome: "Henrique Silva", cpf: "637.635.660-58", telefone: "(11) 98765-4321", email: "henrique@gmail.com", consultas: 3 },
-    { id: 2, nome: "Isabella Souza", cpf: "832.766.650-93", telefone: "(11) 91234-5678", email: "isabella@gmail.com", consultas: 5 },
-    { id: 3, nome: "Simone Oliveira", cpf: "315.717.790-78", telefone: "(11) 97777-8888", email: "simone@gmail.com", consultas: 2 },
-    { id: 4, nome: "João Gabriel", cpf: "123.456.789-00", telefone: "(11) 99999-0000", email: "joao.gabriel@gmail.com", consultas: 1 }
-];
-
-let listaMedicos = [
-    { id: 1, nome: "Dr. Vilson Santos", crm: "CRM/SP 123456", especialidade: "Ortodontia & Clínica Geral", telefone: "(11) 95555-4444", status: "Ativo" },
-    { id: 2, nome: "Dra. Camila Lima", crm: "CRO/SP 654321", especialidade: "Odontopediatria", telefone: "(11) 94444-3333", status: "Ativo" },
-    { id: 3, nome: "Dr. Roberto Mendes", crm: "CRM/SP 987654", especialidade: "Implantodontia", telefone: "(11) 93333-2222", status: "Em Férias" }
-];
-
-// Fallback visual para resolver quando o banco da API retorna campos nulos/mínimos
-const MOCK_LOOKUP = {
-    62: { paciente: "Henrique Silva", cpf: "637.635.660-58", medico: "Dr. Vilson Santos", data_hora: "2026-10-14 às 21:46" },
-    5:  { paciente: "Isabella Souza", cpf: "832.766.650-93", medico: "Dr. Vilson Santos", data_hora: "2026-10-20 às 12:00" },
-    61: { paciente: "Isabella Souza", cpf: "832.766.650-93", medico: "Dra. Camila Lima", data_hora: "2026-10-14 às 21:25" },
-    73: { paciente: "Simone Oliveira", cpf: "315.717.790-78", medico: "Dr. Vilson Santos", data_hora: "2026-10-22 às 21:07" }
-};
-
-let listaAgendamentosLocais = [];
+// Dados carregados da API
+let listaPacientes = [];
+let listaMedicos = [];
+let listaAgendamentos = [];
 
 document.addEventListener("DOMContentLoaded", () => {
-    const inputUrl = document.getElementById("auth-url");
-    if (inputUrl) inputUrl.value = API_BASE_URL;
+    localStorage.removeItem("api_url"); // resto da versão antiga, que deixava trocar a URL
 
     verificarStatusConexao();
-    carregarAgendamentos();
-    renderizarPacientes();
-    renderizarMedicos();
+    carregarTudo();
 });
 
-// NAVEGAÇÃO ENTRE AS ABAS
+// ---------------------------------------------------------------------------
+// UTILITÁRIOS
+// ---------------------------------------------------------------------------
+
+// Faz uma requisição autenticada e devolve o JSON. Lança Error com a mensagem da API.
+async function api(path, { method = "GET", body, query } = {}) {
+    const token = localStorage.getItem("token");
+    if (!token) throw new Error("Por favor, faça a autenticação clicando em \"Autenticar API\".");
+
+    let url = `${API_BASE_URL}${path}`;
+    if (query) url += `?${new URLSearchParams(query)}`;
+
+    const options = { method, headers: { "Authorization": `Bearer ${token}` } };
+    if (body !== undefined) {
+        options.headers["Content-Type"] = "application/json";
+        options.body = JSON.stringify(body);
+    }
+
+    let response;
+    try {
+        response = await fetch(url, options);
+    } catch (e) {
+        throw new Error("Erro de conexão com a API (rede ou CORS).");
+    }
+
+    const data = await response.json().catch(() => null);
+
+    if (response.status === 401) {
+        localStorage.removeItem("token");
+        verificarStatusConexao();
+        throw new Error("Sessão expirada. Autentique-se novamente.");
+    }
+    if (!response.ok) {
+        throw new Error(formatarErro(data, response.status));
+    }
+    return data;
+}
+
+function formatarErro(data, status) {
+    const detail = data && data.detail;
+    if (Array.isArray(detail)) {
+        // Erros 422 do FastAPI vêm como lista
+        return detail.map(d => `${(d.loc || []).slice(-1)[0] || ""}: ${d.msg}`).join("\n");
+    }
+    if (status === 403) return detail || "Seu usuário não tem permissão para esta ação (precisa ser admin ou dev).";
+    return detail || `Erro ${status} na API.`;
+}
+
+function fecharModal(id) {
+    const modalInstance = bootstrap.Modal.getInstance(document.getElementById(id));
+    if (modalInstance) modalInstance.hide();
+}
+
+function somenteDigitos(valor) {
+    return (valor || "").replace(/\D/g, "");
+}
+
+function formatarCpf(cpf) {
+    const d = somenteDigitos(cpf);
+    return d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4") : (cpf || "");
+}
+
+// "AAAA-MM-DD" -> "DD/MM/AAAA"
+function formatarData(data) {
+    if (!data) return "-";
+    const [ano, mes, dia] = data.split("-");
+    return `${dia}/${mes}/${ano}`;
+}
+
+function escaparHtml(texto) {
+    return String(texto ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function linhaMensagem(colspan, html, classe = "text-muted") {
+    return `<tr><td colspan="${colspan}" class="text-center ${classe} py-4">${html}</td></tr>`;
+}
+
+const MSG_LOGIN = '<i class="fas fa-lock me-2"></i>Por favor, faça a autenticação clicando em <b>"Autenticar API"</b> no menu lateral.';
+
+// ---------------------------------------------------------------------------
+// NAVEGAÇÃO E AUTENTICAÇÃO
+// ---------------------------------------------------------------------------
+
 function mostrarAba(nomeAba) {
     document.querySelectorAll(".sidebar .nav-link").forEach(link => link.classList.remove("active"));
     const navItem = document.getElementById(`nav-${nomeAba}`);
@@ -62,124 +121,99 @@ function verificarStatusConexao() {
     }
 }
 
-// Autenticar na API e salvar o JWT Token
 async function autenticarAPI(event) {
     if (event) event.preventDefault();
 
-    const urlInput = document.getElementById("auth-url").value.trim();
     const email = document.getElementById("auth-email").value.trim();
     const senha = document.getElementById("auth-senha").value.trim();
-
-    API_BASE_URL = urlInput.replace(/\/$/, "");
-    localStorage.setItem("api_url", API_BASE_URL);
-
-    const formData = new URLSearchParams();
-    formData.append("username", email);
-    formData.append("password", senha);
 
     try {
         const response = await fetch(`${API_BASE_URL}/auth/token`, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/x-www-form-urlencoded"
-            },
-            body: formData
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({ username: email, password: senha })
         });
 
         if (response.ok) {
             const data = await response.json();
             localStorage.setItem("token", data.access_token);
             verificarStatusConexao();
-
-            const modalElement = document.getElementById("modalAuth");
-            const modalInstance = bootstrap.Modal.getInstance(modalElement);
-            if (modalInstance) modalInstance.hide();
-
+            fecharModal("modalAuth");
             alert("Autenticação realizada com sucesso!");
-            carregarAgendamentos();
+            carregarTudo();
         } else {
             const errData = await response.json().catch(() => ({}));
-            alert(`Erro na Autenticação: ${errData.detail || 'E-mail ou senha incorretos'}`);
+            alert(`Erro na Autenticação: ${errData.detail || "E-mail ou senha incorretos"}`);
         }
     } catch (error) {
         console.error("Erro na requisição de login:", error);
-        alert("Erro ao conectar à API. Verifique a URL informada ou as configurações de CORS.");
+        alert("Erro ao conectar à API. Verifique sua conexão ou as configurações de CORS da API.");
     }
 }
 
-// Retorna Badge Formatada conforme o status
+// Carrega pacientes, médicos e agendamentos
+async function carregarTudo() {
+    await Promise.all([carregarPacientes(), carregarMedicos()]);
+    await carregarAgendamentos(); // depois, para calcular o histórico dos pacientes
+}
+
+// ---------------------------------------------------------------------------
+// AGENDAMENTOS
+// ---------------------------------------------------------------------------
+
+// Status da consulta vindos da API
+const STATUS_AGENDAMENTO = {
+    pendente:   { label: "Pendente",         classe: "bg-warning text-dark" },
+    confirmado: { label: "Confirmado",       classe: "bg-success" },
+    concluido:  { label: "Concluído",        classe: "bg-info text-dark" },
+    ausente:    { label: "Paciente Ausente", classe: "bg-secondary" },
+    cancelado:  { label: "Cancelado",        classe: "bg-danger" }
+};
+
 function getStatusBadge(status) {
-    const s = (status || '').toLowerCase().trim();
-    switch (s) {
-        case 'agendada':
-        case 'confirmada':
-        case 'confirmado':
-            return `<span class="badge bg-success badge-status">Confirmado</span>`;
-        case 'cancelada':
-        case 'cancelado':
-            return `<span class="badge bg-danger badge-status">Cancelado</span>`;
-        case 'pendente':
-            return `<span class="badge bg-warning text-dark badge-status">Pendente</span>`;
-        case 'concluida':
-        case 'concluída':
-        case 'concluido':
-            return `<span class="badge bg-info text-dark badge-status">Concluído</span>`;
-        case 'paciente ausente':
-        case 'ausente':
-            return `<span class="badge bg-secondary badge-status">Paciente Ausente</span>`;
-        default:
-            return `<span class="badge bg-light text-dark badge-status">${status || 'Pendente'}</span>`;
-    }
+    const s = STATUS_AGENDAMENTO[status] || { label: status || "Pendente", classe: "bg-light text-dark" };
+    return `<span class="badge ${s.classe} badge-status">${escaparHtml(s.label)}</span>`;
 }
 
-// Carregar Lista de Agendamentos da API
+// Status do médico vindos da API
+const STATUS_MEDICO = {
+    ativo:   { label: "Ativo",     classe: "bg-success" },
+    ferias:  { label: "Em Férias", classe: "bg-warning text-dark" },
+    inativo: { label: "Inativo",   classe: "bg-secondary" }
+};
+
+function formatarDataHora(date, time) {
+    if (!date) return "-";
+    return `${date} às ${(time || "").slice(0, 5)}`;
+}
+
 async function carregarAgendamentos() {
-    const token = localStorage.getItem("token");
     const tbody = document.getElementById("tabela-agendamentos");
     if (!tbody) return;
 
-    if (!token) {
-        tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-4">
-            <i class="fas fa-lock me-2"></i>Por favor, faça a autenticação clicando em <b>"Autenticar API"</b> no menu lateral.
-        </td></tr>`;
+    if (!localStorage.getItem("token")) {
+        tbody.innerHTML = linhaMensagem(9, MSG_LOGIN);
+        atualizarEstatisticas([]);
         return;
     }
 
     try {
-        const response = await fetch(`${API_BASE_URL}/appointments/list`, {
-            method: "GET",
-            headers: {
-                "Authorization": `Bearer ${token}`,
-                "Content-Type": "application/json"
-            }
-        });
-
-        if (response.ok) {
-            const agendamentosAPI = await response.json();
-            // Combinar os dados da API com os novos agendamentos locais cadastrados na sessão
-            const agendamentosCombinados = [...agendamentosAPI, ...listaAgendamentosLocais];
-            renderizarAgendamentos(agendamentosCombinados);
-            atualizarEstatisticas(agendamentosCombinados);
-        } else if (response.status === 401) {
-            localStorage.removeItem("token");
-            verificarStatusConexao();
-            tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-4">Sessão expirada. Autentique-se novamente.</td></tr>`;
-        } else {
-            tbody.innerHTML = `<tr><td colspan="9" class="text-center text-warning py-4">Erro ao carregar dados da API (${response.status}).</td></tr>`;
-        }
+        listaAgendamentos = await api("/appointments/list");
+        renderizarAgendamentos(listaAgendamentos);
+        atualizarEstatisticas(listaAgendamentos);
+        renderizarPacientes(); // atualiza o histórico de consultas
     } catch (error) {
         console.error("Erro ao carregar agendamentos:", error);
-        tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-4">Erro de conexão ao buscar agendamentos.</td></tr>`;
+        tbody.innerHTML = linhaMensagem(9, escaparHtml(error.message), "text-danger");
     }
 }
 
-// Renderizar Tabela de Agendamentos
 function renderizarAgendamentos(agendamentos) {
     const tbody = document.getElementById("tabela-agendamentos");
     if (!tbody) return;
 
     if (!agendamentos || agendamentos.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-4">Nenhum agendamento encontrado.</td></tr>`;
+        tbody.innerHTML = linhaMensagem(9, "Nenhum agendamento encontrado.");
         return;
     }
 
@@ -187,357 +221,49 @@ function renderizarAgendamentos(agendamentos) {
 
     agendamentos.forEach(item => {
         const tr = document.createElement("tr");
-        const id = item.id || 0;
-        
-        const mock = MOCK_LOOKUP[id] || {};
-
-        const paciente = item.paciente_nome || item.paciente || mock.paciente || "Paciente Cadastrado";
-        const cpf = item.paciente_cpf || item.cpf || mock.cpf || "123.456.789-00";
-        const medico = item.medico_nome || item.medico || mock.medico || "Dr. Vilson Santos";
-        const dataHora = item.data_hora || item.data || mock.data_hora || "2026-10-14 às 21:00";
-        const status = item.status || "pendente";
-        const motivo = item.motivo_ausencia || item.motivo_cancelamento || item.motivo || "-";
+        const id = item.id;
 
         tr.innerHTML = `
-            <td>#${String(id).padStart(5, '0')}</td>
-            <td><strong>${paciente}</strong></td>
-            <td>${cpf}</td>
-            <td>${medico}</td>
-            <td>${dataHora}</td>
-            <td>${getStatusBadge(status)}</td>
-            <td><small class="text-muted fw-semibold">${motivo !== '-' ? motivo : '<em>-</em>'}</small></td>
+            <td>#${escaparHtml(id)}</td>
+            <td><strong>${escaparHtml(item.patient_name)}</strong></td>
+            <td>${formatarCpf(item.patient_cpf)}</td>
+            <td>${escaparHtml(item.doctor_name)}</td>
+            <td>${formatarDataHora(item.date, item.time)}</td>
+            <td>${getStatusBadge(item.status)}</td>
+            <td><small class="text-muted fw-semibold">${item.reason ? escaparHtml(item.reason) : "<em>-</em>"}</small></td>
             <td>
-                <div class="btn-group btn-group-sm">
-                    <button class="btn btn-success" onclick="enviarWhatsApp('${id}', '${paciente}')" title="Enviar WhatsApp">
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-success text-nowrap" onclick="enviarWhatsApp('${id}')" title="Enviar WhatsApp">
                         <i class="fab fa-whatsapp me-1"></i>WhatsApp
                     </button>
-                    <button class="btn btn-primary" onclick="enviarEmail('${id}', '${paciente}')" title="Enviar E-mail">
+                    <button class="btn btn-sm btn-primary text-nowrap" onclick="enviarEmail('${id}')" title="Enviar E-mail">
                         <i class="fas fa-envelope me-1"></i>E-mail
                     </button>
                 </div>
             </td>
-            <td>
-                <button class="btn btn-sm btn-outline-dark fw-bold px-3" onclick="abrirPopUpAcoes(${id}, '${paciente}', '${status}', '${motivo !== '-' ? motivo : ''}')">
+            <td class="text-nowrap">
+                <button class="btn btn-sm btn-outline-dark fw-bold px-3 me-1" onclick="abrirPopUpAcoes('${id}')">
                     Opções <i class="fas fa-chevron-down ms-1 fs-7"></i>
                 </button>
-            </td>
-        `;
-
-        tbody.appendChild(tr);
-    });
-}
-
-// FUNCIONALIDADES DO CADASTRO DE NOVO AGENDAMENTO
-function prepararModalNovoAgendamento() {
-    const selectPaciente = document.getElementById("novo-agendamento-paciente");
-    const selectMedico = document.getElementById("novo-agendamento-medico");
-
-    if (selectPaciente) {
-        selectPaciente.innerHTML = `<option value="">-- Escolha um paciente --</option>`;
-        listaPacientes.forEach(p => {
-            selectPaciente.innerHTML += `<option value="${p.id}">${p.nome} (${p.cpf})</option>`;
-        });
-    }
-
-    if (selectMedico) {
-        selectMedico.innerHTML = `<option value="">-- Escolha um médico --</option>`;
-        listaMedicos.forEach(m => {
-            if (m.status === 'Ativo') {
-                selectMedico.innerHTML += `<option value="${m.nome}">${m.nome} - ${m.especialidade}</option>`;
-            }
-        });
-    }
-
-    document.getElementById("novo-agendamento-cpf").value = "";
-}
-
-function atualizarCpfNovoAgendamento() {
-    const pacienteId = document.getElementById("novo-agendamento-paciente").value;
-    const inputCpf = document.getElementById("novo-agendamento-cpf");
-    const paciente = listaPacientes.find(p => p.id == pacienteId);
-
-    if (paciente) {
-        inputCpf.value = paciente.cpf;
-    } else {
-        inputCpf.value = "";
-    }
-}
-
-async function salvarNovoAgendamento(event) {
-    event.preventDefault();
-    
-    const pacienteId = document.getElementById("novo-agendamento-paciente").value;
-    const pacienteObj = listaPacientes.find(p => p.id == pacienteId);
-    const medicoNome = document.getElementById("novo-agendamento-medico").value;
-    const dataHoraRaw = document.getElementById("novo-agendamento-datahora").value;
-    const status = document.getElementById("novo-agendamento-status").value;
-
-    if (!pacienteObj || !medicoNome || !dataHoraRaw) {
-        alert("Por favor, preencha todos os campos obrigatórios.");
-        return;
-    }
-
-    // Formatar data e hora
-    const dt = new Date(dataHoraRaw);
-    const dataHoraFormatada = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')} às ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
-
-    const novoId = Math.floor(10000 + Math.random() * 90000);
-
-    const novoAgendamentoObj = {
-        id: novoId,
-        paciente_nome: pacienteObj.nome,
-        paciente_cpf: pacienteObj.cpf,
-        medico_nome: medicoNome,
-        data_hora: dataHoraFormatada,
-        status: status,
-        motivo_ausencia: "-"
-    };
-
-    const token = localStorage.getItem("token");
-
-    // Tenta enviar para a API se houver endpoint, e guarda localmente para garantir exibição
-    try {
-        if (token) {
-            await fetch(`${API_BASE_URL}/appointments/create`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    paciente_nome: pacienteObj.nome,
-                    paciente_cpf: pacienteObj.cpf,
-                    medico_nome: medicoNome,
-                    data_hora: dataHoraFormatada,
-                    status: status
-                })
-            }).catch(() => {});
-        }
-    } catch (e) {}
-
-    listaAgendamentosLocais.unshift(novoAgendamentoObj);
-    pacienteObj.consultas += 1;
-    renderizarPacientes();
-
-    alert(`Agendamento #${novoId} para ${pacienteObj.nome} cadastrado com sucesso!`);
-
-    const modalElement = document.getElementById("modalNovoAgendamento");
-    const modalInstance = bootstrap.Modal.getInstance(modalElement);
-    if (modalInstance) modalInstance.hide();
-
-    document.getElementById("form-novo-agendamento").reset();
-    carregarAgendamentos();
-}
-
-// FUNCIONALIDADES DE PACIENTES (LISTAR, NOVO, EDITAR, EXCLUIR)
-function renderizarPacientes() {
-    const tbody = document.getElementById("tabela-pacientes");
-    if (!tbody) return;
-
-    tbody.innerHTML = "";
-    listaPacientes.forEach(p => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-            <td>#${String(p.id).padStart(4, '0')}</td>
-            <td><strong>${p.nome}</strong></td>
-            <td>${p.cpf}</td>
-            <td>${p.telefone}</td>
-            <td>${p.email}</td>
-            <td><span class="badge bg-light text-dark">${p.consultas} consultas</span></td>
-            <td>
-                <button class="btn btn-sm btn-outline-primary me-1" onclick="abrirModalEditarPaciente(${p.id})" title="Editar Cadastro">
-                    <i class="fas fa-edit me-1"></i>Editar
+                <button class="btn btn-sm btn-outline-primary me-1" onclick="abrirModalEditarAgendamento('${id}')" title="Editar Agendamento">
+                    <i class="fas fa-edit"></i>
                 </button>
-                <button class="btn btn-sm btn-outline-danger" onclick="excluirPaciente(${p.id})" title="Excluir">
+                <button class="btn btn-sm btn-outline-danger" onclick="excluirAgendamento('${id}')" title="Excluir Agendamento">
                     <i class="fas fa-trash"></i>
                 </button>
             </td>
         `;
+
         tbody.appendChild(tr);
     });
 }
 
-function salvarNovoPaciente(event) {
-    event.preventDefault();
-    const nome = document.getElementById("novo-paciente-nome").value.trim();
-    const cpf = document.getElementById("novo-paciente-cpf").value.trim();
-    const telefone = document.getElementById("novo-paciente-telefone").value.trim();
-    const email = document.getElementById("novo-paciente-email").value.trim();
-
-    const novoId = listaPacientes.length > 0 ? Math.max(...listaPacientes.map(p => p.id)) + 1 : 1;
-
-    listaPacientes.push({
-        id: novoId,
-        nome,
-        cpf,
-        telefone,
-        email,
-        consultas: 0
-    });
-
-    renderizarPacientes();
-    alert(`Paciente ${nome} cadastrado com sucesso!`);
-
-    const modalElement = document.getElementById("modalNovoPaciente");
-    const modalInstance = bootstrap.Modal.getInstance(modalElement);
-    if (modalInstance) modalInstance.hide();
-
-    document.getElementById("form-novo-paciente").reset();
-}
-
-function abrirModalEditarPaciente(id) {
-    const paciente = listaPacientes.find(p => p.id === id);
-    if (!paciente) return;
-
-    document.getElementById("edit-paciente-id").value = paciente.id;
-    document.getElementById("edit-paciente-nome").value = paciente.nome;
-    document.getElementById("edit-paciente-cpf").value = paciente.cpf;
-    document.getElementById("edit-paciente-telefone").value = paciente.telefone;
-    document.getElementById("edit-paciente-email").value = paciente.email;
-
-    const modal = new bootstrap.Modal(document.getElementById("modalEditarPaciente"));
-    modal.show();
-}
-
-function salvarEdicaoPaciente(event) {
-    event.preventDefault();
-    const id = parseInt(document.getElementById("edit-paciente-id").value);
-    const paciente = listaPacientes.find(p => p.id === id);
-
-    if (paciente) {
-        paciente.nome = document.getElementById("edit-paciente-nome").value.trim();
-        paciente.cpf = document.getElementById("edit-paciente-cpf").value.trim();
-        paciente.telefone = document.getElementById("edit-paciente-telefone").value.trim();
-        paciente.email = document.getElementById("edit-paciente-email").value.trim();
-
-        renderizarPacientes();
-        carregarAgendamentos(); // Atualiza a tabela de agendamentos com as novas informações
-
-        alert(`Cadastro do paciente ${paciente.nome} atualizado com sucesso!`);
-
-        const modalElement = document.getElementById("modalEditarPaciente");
-        const modalInstance = bootstrap.Modal.getInstance(modalElement);
-        if (modalInstance) modalInstance.hide();
-    }
-}
-
-function excluirPaciente(id) {
-    if (confirm("Tem certeza que deseja remover este paciente do sistema?")) {
-        listaPacientes = listaPacientes.filter(p => p.id !== id);
-        renderizarPacientes();
-    }
-}
-
-// FUNCIONALIDADES DE MÉDICOS (LISTAR, NOVO, EDITAR, EXCLUIR)
-function renderizarMedicos() {
-    const tbody = document.getElementById("tabela-medicos");
-    if (!tbody) return;
-
-    tbody.innerHTML = "";
-    listaMedicos.forEach(m => {
-        const tr = document.createElement("tr");
-        const badgeClass = m.status === 'Ativo' ? 'bg-success' : 'bg-warning text-dark';
-        tr.innerHTML = `
-            <td>#${String(m.id).padStart(3, '0')}</td>
-            <td><strong>${m.nome}</strong></td>
-            <td>${m.crm}</td>
-            <td><span class="badge bg-info text-dark">${m.especialidade}</span></td>
-            <td>${m.telefone}</td>
-            <td><span class="badge ${badgeClass}">${m.status}</span></td>
-            <td>
-                <button class="btn btn-sm btn-outline-primary me-1" onclick="abrirModalEditarMedico(${m.id})" title="Editar Cadastro">
-                    <i class="fas fa-edit me-1"></i>Editar
-                </button>
-                <button class="btn btn-sm btn-outline-danger" onclick="excluirMedico(${m.id})" title="Excluir">
-                    <i class="fas fa-trash"></i>
-                </button>
-            </td>
-        `;
-        tbody.appendChild(tr);
-    });
-}
-
-function salvarNovoMedico(event) {
-    event.preventDefault();
-    const nome = document.getElementById("novo-medico-nome").value.trim();
-    const crm = document.getElementById("novo-medico-crm").value.trim();
-    const especialidade = document.getElementById("novo-medico-especialidade").value.trim();
-    const telefone = document.getElementById("novo-medico-telefone").value.trim();
-    const status = document.getElementById("novo-medico-status").value;
-
-    const novoId = listaMedicos.length > 0 ? Math.max(...listaMedicos.map(m => m.id)) + 1 : 1;
-
-    listaMedicos.push({
-        id: novoId,
-        nome,
-        crm,
-        especialidade,
-        telefone,
-        status
-    });
-
-    renderizarMedicos();
-    alert(`Médico ${nome} cadastrado com sucesso!`);
-
-    const modalElement = document.getElementById("modalNovoMedico");
-    const modalInstance = bootstrap.Modal.getInstance(modalElement);
-    if (modalInstance) modalInstance.hide();
-
-    document.getElementById("form-novo-medico").reset();
-}
-
-function abrirModalEditarMedico(id) {
-    const medico = listaMedicos.find(m => m.id === id);
-    if (!medico) return;
-
-    document.getElementById("edit-medico-id").value = medico.id;
-    document.getElementById("edit-medico-nome").value = medico.nome;
-    document.getElementById("edit-medico-crm").value = medico.crm;
-    document.getElementById("edit-medico-especialidade").value = medico.especialidade;
-    document.getElementById("edit-medico-telefone").value = medico.telefone;
-    document.getElementById("edit-medico-status").value = medico.status;
-
-    const modal = new bootstrap.Modal(document.getElementById("modalEditarMedico"));
-    modal.show();
-}
-
-function salvarEdicaoMedico(event) {
-    event.preventDefault();
-    const id = parseInt(document.getElementById("edit-medico-id").value);
-    const medico = listaMedicos.find(m => m.id === id);
-
-    if (medico) {
-        medico.nome = document.getElementById("edit-medico-nome").value.trim();
-        medico.crm = document.getElementById("edit-medico-crm").value.trim();
-        medico.especialidade = document.getElementById("edit-medico-especialidade").value.trim();
-        medico.telefone = document.getElementById("edit-medico-telefone").value.trim();
-        medico.status = document.getElementById("edit-medico-status").value;
-
-        renderizarMedicos();
-        carregarAgendamentos();
-
-        alert(`Cadastro do médico ${medico.nome} atualizado com sucesso!`);
-
-        const modalElement = document.getElementById("modalEditarMedico");
-        const modalInstance = bootstrap.Modal.getInstance(modalElement);
-        if (modalInstance) modalInstance.hide();
-    }
-}
-
-function excluirMedico(id) {
-    if (confirm("Tem certeza que deseja remover este profissional do sistema?")) {
-        listaMedicos = listaMedicos.filter(m => m.id !== id);
-        renderizarMedicos();
-    }
-}
-
-// Atualizar estatísticas dos cards
 function atualizarEstatisticas(agendamentos) {
     if (!Array.isArray(agendamentos)) return;
 
     const total = agendamentos.length;
-    const confirmados = agendamentos.filter(a => ['agendada', 'confirmada', 'confirmado', 'concluida'].includes((a.status || '').toLowerCase())).length;
-    const pendentes = agendamentos.filter(a => (a.status || '').toLowerCase() === 'pendente').length;
+    const confirmados = agendamentos.filter(a => a.status === "confirmado" || a.status === "concluido").length;
+    const pendentes = agendamentos.filter(a => a.status === "pendente").length;
 
     const elTotal = document.getElementById("stat-total");
     const elConfirmados = document.getElementById("stat-confirmados");
@@ -548,11 +274,177 @@ function atualizarEstatisticas(agendamentos) {
     if (elPendentes) elPendentes.innerText = pendentes;
 }
 
+// Preenche os selects de paciente e médico (value = CPF). Só lista médicos ativos.
+function preencherSelectsAgendamento(selectPaciente, selectMedico) {
+    if (selectPaciente) {
+        selectPaciente.innerHTML = `<option value="">-- Escolha um paciente --</option>`;
+        listaPacientes.forEach(p => {
+            selectPaciente.innerHTML += `<option value="${escaparHtml(p.cpf)}">${escaparHtml(p.name)} (${formatarCpf(p.cpf)})</option>`;
+        });
+    }
+
+    if (selectMedico) {
+        selectMedico.innerHTML = `<option value="">-- Escolha um médico --</option>`;
+        listaMedicos.filter(m => m.status === "ativo").forEach(m => {
+            selectMedico.innerHTML += `<option value="${escaparHtml(m.cpf)}">${escaparHtml(m.name)} - ${escaparHtml(m.doctor_specialty)}</option>`;
+        });
+    }
+}
+
+// NOVO AGENDAMENTO
+function prepararModalNovoAgendamento() {
+    preencherSelectsAgendamento(
+        document.getElementById("novo-agendamento-paciente"),
+        document.getElementById("novo-agendamento-medico")
+    );
+    document.getElementById("novo-agendamento-cpf").value = "";
+}
+
+// EDITAR AGENDAMENTO
+function abrirModalEditarAgendamento(id) {
+    const agendamento = listaAgendamentos.find(a => a.id === id);
+    if (!agendamento) return;
+
+    const selectPaciente = document.getElementById("edit-agendamento-paciente");
+    const selectMedico = document.getElementById("edit-agendamento-medico");
+    preencherSelectsAgendamento(selectPaciente, selectMedico);
+
+    // Se o paciente/médico do agendamento não estiver mais nas listas, mantém como opção
+    if (!listaPacientes.some(p => p.cpf === agendamento.patient_cpf)) {
+        selectPaciente.innerHTML += `<option value="${escaparHtml(agendamento.patient_cpf)}">${escaparHtml(agendamento.patient_name)} (${formatarCpf(agendamento.patient_cpf)})</option>`;
+    }
+    // (inclui médico de férias/inativo que já estava no agendamento)
+    if (agendamento.doctor_cpf && !selectMedico.querySelector(`option[value="${agendamento.doctor_cpf}"]`)) {
+        selectMedico.innerHTML += `<option value="${escaparHtml(agendamento.doctor_cpf)}">${escaparHtml(agendamento.doctor_name)}</option>`;
+    }
+
+    document.getElementById("edit-agendamento-id").value = id;
+    document.getElementById("edit-agendamento-titulo-id").innerText = `#${id}`;
+    selectPaciente.value = agendamento.patient_cpf;
+    selectMedico.value = agendamento.doctor_cpf || "";
+    document.getElementById("edit-agendamento-cpf").value = formatarCpf(agendamento.patient_cpf);
+    document.getElementById("edit-agendamento-datahora").value = `${agendamento.date}T${(agendamento.time || "").slice(0, 5)}`;
+
+    const modal = new bootstrap.Modal(document.getElementById("modalEditarAgendamento"));
+    modal.show();
+}
+
+function atualizarCpfEditarAgendamento() {
+    const cpf = document.getElementById("edit-agendamento-paciente").value;
+    document.getElementById("edit-agendamento-cpf").value = cpf ? formatarCpf(cpf) : "";
+}
+
+async function salvarEdicaoAgendamento(event) {
+    event.preventDefault();
+
+    const id = document.getElementById("edit-agendamento-id").value;
+    const selectPaciente = document.getElementById("edit-agendamento-paciente");
+    const cpf = selectPaciente.value;
+    const paciente = listaPacientes.find(p => p.cpf === cpf);
+    const pacienteNome = paciente ? paciente.name : (listaAgendamentos.find(a => a.id === id) || {}).patient_name;
+    const medicoCpf = document.getElementById("edit-agendamento-medico").value;
+    const dataHoraRaw = document.getElementById("edit-agendamento-datahora").value;
+
+    if (!cpf || !medicoCpf || !dataHoraRaw) {
+        alert("Por favor, preencha todos os campos obrigatórios.");
+        return;
+    }
+
+    const [date, hora] = dataHoraRaw.split("T");
+
+    try {
+        await api("/appointments/update", {
+            method: "PUT",
+            query: { id },
+            body: {
+                patient_name: pacienteNome,
+                patient_cpf: cpf,
+                doctor_cpf: medicoCpf,
+                date: date,
+                time: `${hora}:00`
+            }
+        });
+
+        alert(`Agendamento #${id} atualizado com sucesso!`);
+        fecharModal("modalEditarAgendamento");
+        carregarAgendamentos();
+    } catch (error) {
+        alert(`Erro ao atualizar agendamento:\n${error.message}`);
+    }
+}
+
+// EXCLUIR AGENDAMENTO
+async function excluirAgendamento(id) {
+    const agendamento = listaAgendamentos.find(a => a.id === id);
+    const descricao = agendamento
+        ? `#${id} de ${agendamento.patient_name} (${formatarDataHora(agendamento.date, agendamento.time)})`
+        : `#${id}`;
+
+    if (!confirm(`Tem certeza que deseja excluir o agendamento ${descricao}?`)) return;
+
+    try {
+        await api("/appointments/delete", { method: "DELETE", query: { id } });
+        carregarAgendamentos();
+    } catch (error) {
+        alert(`Erro ao excluir agendamento:\n${error.message}`);
+    }
+}
+
+function atualizarCpfNovoAgendamento() {
+    const cpf = document.getElementById("novo-agendamento-paciente").value;
+    document.getElementById("novo-agendamento-cpf").value = cpf ? formatarCpf(cpf) : "";
+}
+
+async function salvarNovoAgendamento(event) {
+    event.preventDefault();
+
+    const cpf = document.getElementById("novo-agendamento-paciente").value;
+    const paciente = listaPacientes.find(p => p.cpf === cpf);
+    const medicoCpf = document.getElementById("novo-agendamento-medico").value;
+    const dataHoraRaw = document.getElementById("novo-agendamento-datahora").value; // "AAAA-MM-DDTHH:MM"
+    const status = document.getElementById("novo-agendamento-status").value;
+
+    if (!paciente || !medicoCpf || !dataHoraRaw) {
+        alert("Por favor, preencha todos os campos obrigatórios.");
+        return;
+    }
+
+    const [date, hora] = dataHoraRaw.split("T");
+
+    try {
+        const criado = await api("/appointments/create", {
+            method: "POST",
+            body: {
+                patient_name: paciente.name,
+                patient_cpf: paciente.cpf,
+                doctor_cpf: medicoCpf,
+                date: date,
+                time: `${hora}:00`
+            }
+        });
+
+        // A API sempre cria como "pendente"; se escolheu outro status, atualiza em seguida
+        if (status && status !== "pendente") {
+            await api("/appointments/status", { method: "PUT", query: { id: criado.id, status } });
+        }
+
+        alert(`Agendamento #${criado.id} para ${paciente.name} cadastrado com sucesso!`);
+        fecharModal("modalNovoAgendamento");
+        document.getElementById("form-novo-agendamento").reset();
+        carregarAgendamentos();
+    } catch (error) {
+        alert(`Erro ao cadastrar agendamento:\n${error.message}`);
+    }
+}
+
 // AÇÕES DE AGENDAMENTO (POP-UP MODAL)
-function abrirPopUpAcoes(id, paciente, statusAtual, motivoAtual) {
+function abrirPopUpAcoes(id) {
+    const agendamento = listaAgendamentos.find(a => a.id === id);
+    const paciente = agendamento ? agendamento.patient_name : "";
+
     document.getElementById("popup-agendamento-id").value = id;
-    document.getElementById("modalAcoesTitulo").innerHTML = `<i class="fas fa-sliders-h me-2 text-primary"></i>Agendamento #${id} - ${paciente}`;
-    
+    document.getElementById("modalAcoesTitulo").innerHTML = `<i class="fas fa-sliders-h me-2 text-primary"></i>Agendamento #${escaparHtml(id)} - ${escaparHtml(paciente)}`;
+
     ocultarFormMotivo();
 
     const modal = new bootstrap.Modal(document.getElementById("modalPopUpAcoes"));
@@ -563,8 +455,8 @@ function mostrarFormMotivo(status) {
     statusSelecionadoTemp = status;
     const container = document.getElementById("form-motivo-container");
     const label = document.getElementById("label-motivo-titulo");
-    
-    if (status === 'paciente ausente') {
+
+    if (status === "ausente") {
         label.innerText = "Informe o Motivo da Ausência do Paciente:";
     } else {
         label.innerText = "Informe o Motivo do Cancelamento:";
@@ -582,19 +474,19 @@ function ocultarFormMotivo() {
 
 async function executarAcaoPopUp(novoStatus, motivo = "") {
     const id = document.getElementById("popup-agendamento-id").value;
-    
-    // Atualizar lista local caso seja um agendamento recém-criado
-    const agendamentoLocal = listaAgendamentosLocais.find(a => a.id == id);
-    if (agendamentoLocal) {
-        agendamentoLocal.status = novoStatus;
-        if (motivo) agendamentoLocal.motivo_ausencia = motivo;
+
+    const query = { id, status: novoStatus };
+    if (motivo) query.reason = motivo; // a API só guarda o motivo para "ausente" e "cancelado"
+
+    try {
+        await api("/appointments/status", { method: "PUT", query });
+        const label = (STATUS_AGENDAMENTO[novoStatus] || {}).label || novoStatus;
+        alert(`Agendamento #${id} atualizado para "${label}" com sucesso!`);
+        fecharModal("modalPopUpAcoes");
+        carregarAgendamentos();
+    } catch (error) {
+        alert(`Erro ao atualizar agendamento:\n${error.message}`);
     }
-
-    await enviarAtualizacaoStatus(id, novoStatus, motivo);
-
-    const modalElement = document.getElementById("modalPopUpAcoes");
-    const modalInstance = bootstrap.Modal.getInstance(modalElement);
-    if (modalInstance) modalInstance.hide();
 }
 
 async function confirmarComMotivo() {
@@ -606,44 +498,295 @@ async function confirmarComMotivo() {
     await executarAcaoPopUp(statusSelecionadoTemp, motivoText);
 }
 
-async function enviarAtualizacaoStatus(id, novoStatus, motivo = "") {
-    const token = localStorage.getItem("token");
-    if (!token) {
-        alert("Por favor, autentique-se primeiro.");
+// NOTIFICAÇÕES (a API monta a mensagem e devolve o link pronto)
+// with_link: false -> mensagem sem link; o paciente responde SIM/NÃO e a recepção confirma pelo sistema
+async function abrirMensagem(id, canal) {
+    try {
+        const { url } = await api(`/appointments/notify/${canal}-link`, { query: { id, with_link: false } });
+        window.open(url, "_blank");
+    } catch (error) {
+        alert(`Erro ao gerar mensagem:\n${error.message}`);
+    }
+}
+
+function enviarWhatsApp(id) {
+    abrirMensagem(id, "whatsapp");
+}
+
+function enviarEmail(id) {
+    abrirMensagem(id, "email");
+}
+
+// ---------------------------------------------------------------------------
+// PACIENTES
+// ---------------------------------------------------------------------------
+
+async function carregarPacientes() {
+    const tbody = document.getElementById("tabela-pacientes");
+    if (!tbody) return;
+
+    if (!localStorage.getItem("token")) {
+        listaPacientes = [];
+        tbody.innerHTML = linhaMensagem(8, MSG_LOGIN);
         return;
     }
 
     try {
-        const bodyData = { status: novoStatus };
-        if (motivo) bodyData.motivo_ausencia = motivo;
-
-        const response = await fetch(`${API_BASE_URL}/appointments/${id}`, {
-            method: "PATCH",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${token}`
-            },
-            body: JSON.stringify(bodyData)
-        });
-
-        if (response.ok) {
-            alert(`Agendamento #${id} atualizado para "${novoStatus}" com sucesso!`);
-            carregarAgendamentos();
-        } else {
-            // Caso seja local, já reflete no front
-            carregarAgendamentos();
-        }
+        listaPacientes = await api("/patients/list");
+        renderizarPacientes();
     } catch (error) {
-        console.error("Erro ao atualizar status:", error);
-        carregarAgendamentos();
+        console.error("Erro ao carregar pacientes:", error);
+        tbody.innerHTML = linhaMensagem(8, escaparHtml(error.message), "text-danger");
     }
 }
 
-function enviarWhatsApp(id, paciente) {
-    const msg = encodeURIComponent(`Olá ${paciente}, confirmamos seu agendamento na clínica MinhaAgenda!`);
-    window.open(`https://api.whatsapp.com/send?text=${msg}`, "_blank");
+function renderizarPacientes() {
+    const tbody = document.getElementById("tabela-pacientes");
+    if (!tbody || !localStorage.getItem("token")) return;
+
+    if (listaPacientes.length === 0) {
+        tbody.innerHTML = linhaMensagem(8, "Nenhum paciente cadastrado.");
+        return;
+    }
+
+    tbody.innerHTML = "";
+    listaPacientes.forEach(p => {
+        const consultas = listaAgendamentos.filter(a => a.patient_cpf === p.cpf).length;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>#${escaparHtml(p.id)}</td>
+            <td><strong>${escaparHtml(p.name)}</strong></td>
+            <td>${formatarCpf(p.cpf)}</td>
+            <td>${escaparHtml(p.tel)}</td>
+            <td>${escaparHtml(p.email)}</td>
+            <td>${formatarData(p.dt_nasc)}</td>
+            <td><span class="badge bg-light text-dark">${consultas} consultas</span></td>
+            <td>
+                <button class="btn btn-sm btn-outline-primary me-1" onclick="abrirModalEditarPaciente('${p.cpf}')" title="Editar Cadastro">
+                    <i class="fas fa-edit me-1"></i>Editar
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="excluirPaciente('${p.cpf}')" title="Excluir">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
 }
 
-function enviarEmail(id, paciente) {
-    alert(`E-mail de lembrete enviado para o paciente ${paciente}!`);
+async function salvarNovoPaciente(event) {
+    event.preventDefault();
+    const nome = document.getElementById("novo-paciente-nome").value.trim();
+
+    try {
+        await api("/patients/create", {
+            method: "POST",
+            body: {
+                name: nome,
+                cpf: somenteDigitos(document.getElementById("novo-paciente-cpf").value),
+                tel: document.getElementById("novo-paciente-telefone").value.trim(),
+                email: document.getElementById("novo-paciente-email").value.trim(),
+                dt_nasc: document.getElementById("novo-paciente-dtnasc").value
+            }
+        });
+
+        alert(`Paciente ${nome} cadastrado com sucesso!`);
+        fecharModal("modalNovoPaciente");
+        document.getElementById("form-novo-paciente").reset();
+        carregarPacientes();
+    } catch (error) {
+        alert(`Erro ao cadastrar paciente:\n${error.message}`);
+    }
+}
+
+function abrirModalEditarPaciente(cpf) {
+    const paciente = listaPacientes.find(p => p.cpf === cpf);
+    if (!paciente) return;
+
+    document.getElementById("edit-paciente-id").value = paciente.cpf; // CPF atual é a chave na API
+    document.getElementById("edit-paciente-nome").value = paciente.name;
+    document.getElementById("edit-paciente-cpf").value = formatarCpf(paciente.cpf);
+    document.getElementById("edit-paciente-telefone").value = paciente.tel;
+    document.getElementById("edit-paciente-email").value = paciente.email;
+    document.getElementById("edit-paciente-dtnasc").value = paciente.dt_nasc || "";
+
+    const modal = new bootstrap.Modal(document.getElementById("modalEditarPaciente"));
+    modal.show();
+}
+
+async function salvarEdicaoPaciente(event) {
+    event.preventDefault();
+    const cpfAtual = document.getElementById("edit-paciente-id").value;
+    const nome = document.getElementById("edit-paciente-nome").value.trim();
+
+    try {
+        await api("/patients/update", {
+            method: "PUT",
+            query: { cpf: cpfAtual },
+            body: {
+                name: nome,
+                cpf: somenteDigitos(document.getElementById("edit-paciente-cpf").value),
+                tel: document.getElementById("edit-paciente-telefone").value.trim(),
+                email: document.getElementById("edit-paciente-email").value.trim(),
+                dt_nasc: document.getElementById("edit-paciente-dtnasc").value
+            }
+        });
+
+        alert(`Cadastro do paciente ${nome} atualizado com sucesso!`);
+        fecharModal("modalEditarPaciente");
+        await carregarPacientes();
+        carregarAgendamentos();
+    } catch (error) {
+        alert(`Erro ao atualizar paciente:\n${error.message}`);
+    }
+}
+
+async function excluirPaciente(cpf) {
+    if (!confirm("Tem certeza que deseja remover este paciente do sistema?")) return;
+
+    try {
+        await api("/patients/delete", { method: "DELETE", query: { cpf } });
+        await carregarPacientes();
+        carregarAgendamentos();
+    } catch (error) {
+        alert(`Erro ao excluir paciente:\n${error.message}`);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MÉDICOS
+// ---------------------------------------------------------------------------
+
+async function carregarMedicos() {
+    const tbody = document.getElementById("tabela-medicos");
+    if (!tbody) return;
+
+    if (!localStorage.getItem("token")) {
+        listaMedicos = [];
+        tbody.innerHTML = linhaMensagem(7, MSG_LOGIN);
+        return;
+    }
+
+    try {
+        listaMedicos = await api("/doctors/list");
+        renderizarMedicos();
+    } catch (error) {
+        console.error("Erro ao carregar médicos:", error);
+        tbody.innerHTML = linhaMensagem(7, escaparHtml(error.message), "text-danger");
+    }
+}
+
+function renderizarMedicos() {
+    const tbody = document.getElementById("tabela-medicos");
+    if (!tbody) return;
+
+    if (listaMedicos.length === 0) {
+        tbody.innerHTML = linhaMensagem(7, "Nenhum médico cadastrado.");
+        return;
+    }
+
+    tbody.innerHTML = "";
+    listaMedicos.forEach(m => {
+        const st = STATUS_MEDICO[m.status] || { label: m.status || "-", classe: "bg-light text-dark" };
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>#${escaparHtml(m.id)}</td>
+            <td><strong>${escaparHtml(m.name)}</strong></td>
+            <td>${m.registration ? escaparHtml(m.registration) : "-"}</td>
+            <td><span class="badge bg-info text-dark">${escaparHtml(m.doctor_specialty)}</span></td>
+            <td>${escaparHtml(m.tel)}</td>
+            <td><span class="badge ${st.classe}">${escaparHtml(st.label)}</span></td>
+            <td>
+                <button class="btn btn-sm btn-outline-primary me-1" onclick="abrirModalEditarMedico('${m.cpf}')" title="Editar Cadastro">
+                    <i class="fas fa-edit me-1"></i>Editar
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="excluirMedico('${m.cpf}')" title="Excluir">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+async function salvarNovoMedico(event) {
+    event.preventDefault();
+    const nome = document.getElementById("novo-medico-nome").value.trim();
+
+    try {
+        await api("/doctors/create", {
+            method: "POST",
+            body: {
+                name: nome,
+                cpf: somenteDigitos(document.getElementById("novo-medico-cpf").value),
+                email: document.getElementById("novo-medico-email").value.trim(),
+                tel: document.getElementById("novo-medico-telefone").value.trim(),
+                doctor_specialty: document.getElementById("novo-medico-especialidade").value.trim(),
+                registration: document.getElementById("novo-medico-crm").value.trim() || null,
+                status: document.getElementById("novo-medico-status").value
+            }
+        });
+
+        alert(`Médico ${nome} cadastrado com sucesso!`);
+        fecharModal("modalNovoMedico");
+        document.getElementById("form-novo-medico").reset();
+        carregarMedicos();
+    } catch (error) {
+        alert(`Erro ao cadastrar médico:\n${error.message}`);
+    }
+}
+
+function abrirModalEditarMedico(cpf) {
+    const medico = listaMedicos.find(m => m.cpf === cpf);
+    if (!medico) return;
+
+    document.getElementById("edit-medico-id").value = medico.cpf; // CPF atual é a chave na API
+    document.getElementById("edit-medico-nome").value = medico.name;
+    document.getElementById("edit-medico-email").value = medico.email;
+    document.getElementById("edit-medico-crm").value = medico.registration || "";
+    document.getElementById("edit-medico-especialidade").value = medico.doctor_specialty;
+    document.getElementById("edit-medico-telefone").value = medico.tel;
+    document.getElementById("edit-medico-status").value = medico.status || "ativo";
+
+    const modal = new bootstrap.Modal(document.getElementById("modalEditarMedico"));
+    modal.show();
+}
+
+async function salvarEdicaoMedico(event) {
+    event.preventDefault();
+    const cpf = document.getElementById("edit-medico-id").value;
+    const nome = document.getElementById("edit-medico-nome").value.trim();
+
+    try {
+        await api("/doctors/update", {
+            method: "PUT",
+            query: { cpf },
+            body: {
+                name: nome,
+                email: document.getElementById("edit-medico-email").value.trim(),
+                tel: document.getElementById("edit-medico-telefone").value.trim(),
+                doctor_specialty: document.getElementById("edit-medico-especialidade").value.trim(),
+                registration: document.getElementById("edit-medico-crm").value.trim() || null,
+                status: document.getElementById("edit-medico-status").value
+            }
+        });
+
+        alert(`Cadastro do médico ${nome} atualizado com sucesso!`);
+        fecharModal("modalEditarMedico");
+        await carregarMedicos();
+        carregarAgendamentos();
+    } catch (error) {
+        alert(`Erro ao atualizar médico:\n${error.message}`);
+    }
+}
+
+async function excluirMedico(cpf) {
+    if (!confirm("Tem certeza que deseja remover este profissional do sistema?")) return;
+
+    try {
+        await api("/doctors/delete", { method: "DELETE", query: { cpf } });
+        carregarMedicos();
+    } catch (error) {
+        alert(`Erro ao excluir médico:\n${error.message}`);
+    }
 }
